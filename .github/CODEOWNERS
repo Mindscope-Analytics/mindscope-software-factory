@@ -1,0 +1,8 @@
+# Revisor por defecto de todo el repo.
+*                     @arturomagdiel666
+# Rutas sensibles: siempre el owner.
+/.github/             @arturomagdiel666
+/.factory/            @arturomagdiel666
+/.claude/             @arturomagdiel666
+/.githooks/           @arturomagdiel666
+/supabase/migrations/ @arturomagdiel666

@@ -1,0 +1,179 @@
+name: claude-steward
+
+# Steward: Claude intenta corregir un PR cuando (a) un OWNER/MEMBER comenta "@claude ..." en
+# el PR, o (b) el workflow `ci` falla en una rama de PR del mismo repo. Máximo 3 intentos por
+# PR (etiquetas steward-attempt-1..3). "@claude stop" pone steward-stopped y lo detiene.
+# Prohibido para el steward: aprobar, fusionar, tocar .github/workflows y .factory.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: claude-steward-${{ github.event.issue.number || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    name: "@claude stop"
+    if: |
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && contains(github.event.comment.body, '@claude stop')
+      && contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh label create steward-stopped --color B60205 --description "Steward detenido por una persona" -R "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh issue edit "$PR" --add-label steward-stopped -R "$GITHUB_REPOSITORY"
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "🛑 Steward detenido. Quita la etiqueta \`steward-stopped\` para reactivarlo."
+
+  steward:
+    name: claude steward
+    if: |
+      (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && contains(github.event.comment.body, '@claude')
+        && !contains(github.event.comment.body, '@claude stop')
+        && contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association))
+      || (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'failure'
+        && github.event.workflow_run.event == 'pull_request'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: ¿Hay token?
+        id: token
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Falta el secret CLAUDE_CODE_OAUTH_TOKEN; el steward se omite."
+          fi
+
+      - name: Resolver PR, rama e intentos
+        id: pr
+        if: steps.token.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ISSUE_PR: ${{ github.event.issue.number }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "issue_comment" ]; then
+            pr="$ISSUE_PR"
+          else
+            pr="$(gh pr list -R "$GITHUB_REPOSITORY" --head "$RUN_BRANCH" --state open --json number --jq '.[0].number // empty')"
+            [ -n "$pr" ] || { echo "Sin PR abierto para $RUN_BRANCH; nada que hacer."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          fi
+          json="$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json headRefName,headRepository,headRepositoryOwner,labels,isDraft,state)"
+          branch="$(echo "$json" | jq -r .headRefName)"
+          owner="$(echo "$json" | jq -r .headRepositoryOwner.login)"
+          [ "$owner" = "${GITHUB_REPOSITORY%%/*}" ] || { echo "::error::PR desde fork; el steward no actúa."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          labels="$(echo "$json" | jq -r '.labels[].name')"
+          if echo "$labels" | grep -qx steward-stopped; then echo "steward-stopped presente; salgo."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          attempts="$(echo "$labels" | grep -cE '^steward-attempt-[123]$' || true)"
+          if [ "$attempts" -ge 3 ]; then
+            gh pr comment "$pr" -R "$GITHUB_REPOSITORY" --body "⚠️ Steward: se alcanzó el máximo de 3 intentos. Requiere intervención humana. Quita las etiquetas \`steward-attempt-*\` para reiniciar el contador."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          next=$((attempts+1))
+          for i in 1 2 3; do gh label create "steward-attempt-$i" --color FBCA04 --description "Intento $i del steward" -R "$GITHUB_REPOSITORY" 2>/dev/null || true; done
+          gh issue edit "$pr" --add-label "steward-attempt-$next" -R "$GITHUB_REPOSITORY"
+          {
+            echo "skip=false"; echo "number=$pr"; echo "branch=$branch"; echo "attempt=$next"
+            if [ "$EVENT" = "workflow_run" ]; then echo "reason=El workflow ci falló en $RUN_SHA: $RUN_URL"; else
+              echo "reason<<EOF_R"; echo "Comentario de una persona en el PR:"; echo "$COMMENT"; echo "EOF_R"; fi
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Guardar huella de archivos protegidos
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          { git ls-files .github/workflows .factory | sort | xargs -r sha256sum; } > /tmp/protected.before || true
+
+      - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allow_fork_prs: "false"
+          use_sticky_comment: "true"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ steps.pr.outputs.number }}
+            RAMA: ${{ steps.pr.outputs.branch }}
+            INTENTO: ${{ steps.pr.outputs.attempt }} de 3
+
+            Eres el steward de la Factory de Mindscope Analytics. Motivo de esta ejecución:
+            ${{ steps.pr.outputs.reason }}
+
+            Tu trabajo: dejar el PR en verde o atender lo que pidió la persona, con el cambio
+            MÁS PEQUEÑO posible, respetando `CLAUDE.md` y `.factory/definition-of-done.md`.
+
+            Pasos:
+            1. Lee el motivo. Si es un fallo de CI, obtén el log (`gh run view <id> --log-failed`)
+               y reproduce localmente (`pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test`).
+            2. Corrige la causa raíz. NUNCA debilites, borres ni marques `skip` en un test.
+            3. Commit con Conventional Commits y `git push` a la rama del PR (nunca --force).
+            4. Comenta en el PR: qué cambió (archivos), por qué, y cómo revertir
+               (`git revert <sha>`). Si no pudiste arreglarlo, explica qué encontraste y qué
+               falta, y detente.
+
+            Prohibido absolutamente:
+            - Aprobar, solicitar cambios o fusionar el PR (`gh pr review`, `gh pr merge`).
+            - Tocar `.github/workflows/**` y `.factory/**`. Si el arreglo requiere tocarlos,
+              explícalo en un comentario y detente.
+            - Añadir secretos, tocar `.env*`, `eas.json` o `app.config.*` con valores.
+            Español, identificadores en inglés.
+          claude_args: |
+            --allowed-tools "Bash(git add:*),Bash(git commit:*),Bash(git push origin ${{ steps.pr.outputs.branch }}),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(pnpm:*),Bash(corepack:*),Bash(node:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh run view:*),Bash(gh run list:*),Bash(bash scripts/check-rls.sh),Bash(bash scripts/test-guard.sh),Read,Edit,Write,MultiEdit,Grep,Glob"
+            --disallowed-tools "Bash(gh pr merge:*),Bash(gh pr review:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*)"
+
+      - name: Verificar que no se tocaron archivos protegidos
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH" --quiet
+          git checkout -q "origin/$BRANCH"
+          { git ls-files .github/workflows .factory | sort | xargs -r sha256sum; } > /tmp/protected.after || true
+          if ! diff -q /tmp/protected.before /tmp/protected.after >/dev/null; then
+            echo "::error::El steward modificó .github/workflows o .factory. Revertir manualmente."
+            gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "🚨 Steward: se detectó un cambio en \`.github/workflows\` o \`.factory\` (prohibido). Revisa el último commit y reviértelo con \`git revert\`. Se añade \`steward-stopped\`."
+            gh issue edit "$PR" --add-label steward-stopped -R "$GITHUB_REPOSITORY" || true
+            exit 1
+          fi
+          echo "Archivos protegidos intactos."

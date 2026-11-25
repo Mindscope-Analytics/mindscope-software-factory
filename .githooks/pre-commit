@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# pre-commit — compuerta local (activada por scripts/setup-hooks.sh).
+#  1. gitleaks protect --staged: ningún secreto en lo que se va a commitear.
+#  2. actionlint si cambian workflows.
+#  3. semgrep (reglas p/default del registry, sin métricas) sobre los archivos staged, con timeout.
+set -u
+red()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+info() { printf '\033[36m%s\033[0m\n' "$*" >&2; }
+need() { command -v "$1" >/dev/null 2>&1 || { red "pre-commit: falta '$1'. $2"; exit 1; }; }
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$staged" ] && exit 0
+
+# 1. gitleaks ---------------------------------------------------------------------
+need gitleaks "Instala desde https://github.com/gitleaks/gitleaks/releases (binario en ~/.local/bin)."
+info "pre-commit: gitleaks protect --staged"
+if ! gitleaks protect --staged --redact --no-banner; then
+  red "pre-commit: gitleaks encontró posibles secretos. Quítalos o añádelos a .gitleaks.toml si son placeholders."
+  exit 1
+fi
+
+# 2. actionlint ---------------------------------------------------------------------
+if printf '%s\n' "$staged" | grep -qE '^\.github/workflows/.*\.ya?ml$'; then
+  need actionlint "Instala con el script de https://github.com/rhysd/actionlint (binario en ~/.local/bin)."
+  info "pre-commit: actionlint"
+  # shellcheck disable=SC2046
+  actionlint $(printf '%s\n' "$staged" | grep -E '^\.github/workflows/.*\.ya?ml$') || exit 1
+fi
+
+# 3. semgrep ------------------------------------------------------------------------
+code="$(printf '%s\n' "$staged" | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|py|sql|sh|ya?ml|json)$' | grep -vE '(^|/)pnpm-lock\.yaml$' || true)"
+if [ -n "$code" ]; then
+  need semgrep "Instala con pipx: pipx install semgrep"
+  info "pre-commit: semgrep p/default (timeout 300 s)"
+  # shellcheck disable=SC2086
+  if ! timeout 300 semgrep scan --config p/default --error --quiet --metrics=off $code; then
+    red "pre-commit: semgrep reportó hallazgos o excedió el tiempo. Corrige o documenta con '# nosemgrep: <rule>'."
+    exit 1
+  fi
+fi
+
+exit 0

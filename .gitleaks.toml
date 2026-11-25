@@ -1,0 +1,19 @@
+# Configuración de gitleaks para la Factory.
+# Extiende las reglas por defecto y permite únicamente placeholders documentados.
+title = "MASF gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholders de ejemplo que no son secretos"
+regexes = [
+  '''tu_anon_key_aqui''',
+  '''<anon-key>''',
+  '''REEMPLAZAR_[A-Za-z_]+''',
+  '''sk-ant-xxxx''',
+  '''re_xxxx''',
+]
+paths = [
+  '''pnpm-lock\.yaml''',
+]

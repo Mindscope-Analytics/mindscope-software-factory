@@ -1,0 +1,78 @@
+# ─── Dependencias y builds ───────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+web-build/
+.expo/
+.turbo/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+
+# ─── Variables de entorno: NUNCA se commitean valores ────────────────────────
+# Solo los ejemplos documentados viajan en el repo.
+.env
+.env.*
+!.env.example
+
+# ─── Datos: dumps, respaldos, hojas de cálculo y bases locales ───────────────
+# Patrón cosechado de okr-tracker (HO-003): cada exclusión explica el porqué.
+# Dumps y respaldos completos pueden contener PII y hashes de contraseñas.
+*.dump
+*.sql.gz
+full-backup.json
+**/full-backup.json
+*-backup-*.json
+# Bases de datos locales (SQLite y similares) nunca viajan en el repo.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+# Audit logs append-only viven en el volumen de datos, no en git.
+audit-log.json
+**/audit-log.json
+# Hojas de cálculo y CSV suelen ser datos reales de clientes o equipo.
+*.xlsx
+*.xls
+*.csv
+# Carpetas de intercambio con datos operativos.
+handoff/
+server/data/
+
+# ─── Supabase local ──────────────────────────────────────────────────────────
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+supabase/signing_keys.json
+
+# ─── Nativo / credenciales de firma ──────────────────────────────────────────
+.kotlin/
+*.orig.*
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+/ios
+/android
+
+# ─── Logs, SO y editores ─────────────────────────────────────────────────────
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.metro-health-check*
+.DS_Store
+Thumbs.db
+~$*
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ─── Claude Code: ajustes locales de cada máquina ────────────────────────────
+.claude/settings.local.json
+.playwright-mcp/

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://supabase.com/schemas/config/v1.json",
+  // Configuración local del Supabase CLI (3.x). Fuente de verdad del esquema:
+  // supabase/migrations. Tests pgTAP: supabase/tests. Plantillas de Auth: supabase/templates.
+  // `project_id` distingue proyectos locales en la misma máquina; cámbialo al aplicar el preset.
+  "project_id": "project",
+
+  "api": {
+    "enabled": true,
+    "port": 54321,
+    "schemas": ["public", "graphql_public"],
+    "extra_search_path": ["public", "extensions"],
+    "max_rows": 1000,
+    // false = las tablas nuevas NO quedan expuestas a anon/authenticated sin GRANT explícito.
+    // Obliga a declarar grants en cada migración, igual que las policies.
+    "auto_expose_new_tables": false
+  },
+
+  "db": {
+    "port": 54322,
+    "shadow_port": 54320,
+    "health_timeout": "2m",
+    "major_version": 17,
+    "migrations": {
+      "enabled": true,
+      "schema_paths": []
+    },
+    "seed": {
+      "enabled": true,
+      "sql_paths": ["./seed.sql"]
+    }
+  },
+
+  "realtime": { "enabled": false },
+  "studio": { "enabled": true, "port": 54323, "api_url": "http://127.0.0.1" },
+  "local_smtp": { "enabled": true, "port": 54324 },
+
+  "storage": {
+    "enabled": true,
+    "file_size_limit": "10MiB"
+  },
+
+  "auth": {
+    "enabled": true,
+    "site_url": "http://127.0.0.1:8081",
+    "additional_redirect_urls": ["http://127.0.0.1:8081", "exp://127.0.0.1:8081"],
+    "jwt_expiry": 3600,
+    "enable_refresh_token_rotation": true,
+    "refresh_token_reuse_interval": 10,
+    "enable_signup": true,
+    "enable_anonymous_sign_ins": false,
+    "enable_manual_linking": false,
+    "minimum_password_length": 8,
+    "password_requirements": "letters_digits",
+
+    // Límites de Auth (regla 6 de CLAUDE.md). Refléjalos en el dashboard del proyecto remoto.
+    "rate_limit": {
+      "email_sent": 30,
+      "sms_sent": 30,
+      "anonymous_users": 30,
+      "token_refresh": 150,
+      "sign_in_sign_ups": 30,
+      "token_verifications": 30
+    },
+
+    "email": {
+      "enabled": true,
+      "double_confirm_changes": true,
+      "enable_confirmations": true,
+      "secure_password_change": true,
+      "max_frequency": "1m0s",
+      "otp_length": 6,
+      "otp_expiry": 600,
+      // Plantillas versionadas (español, neutras). Las variables disponibles:
+      // {{ .Token }} (código OTP), {{ .ConfirmationURL }}, {{ .SiteURL }}, {{ .Email }}.
+      "template": {
+        "confirmation": {
+          "subject": "Confirma tu correo",
+          "content_path": "./supabase/templates/confirmation.html"
+        },
+        "magic_link": {
+          "subject": "Tu enlace de acceso",
+          "content_path": "./supabase/templates/magic_link.html"
+        },
+        "recovery": {
+          "subject": "Restablece tu contraseña",
+          "content_path": "./supabase/templates/recovery.html"
+        }
+      }
+    },
+
+    "sms": { "enabled": false, "enable_confirmations": false },
+    "mfa": {
+      "max_enrolled_factors": 10,
+      "totp": { "enroll_enabled": false, "verify_enabled": false }
+    },
+    "external": {}
+  },
+
+  "edge_runtime": {
+    "enabled": true,
+    "policy": "per_worker",
+    "inspector_port": 8083
+  }
+}

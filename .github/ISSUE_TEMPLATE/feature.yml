@@ -1,0 +1,44 @@
+name: Feature
+description: Algo nuevo o un cambio de comportamiento
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema que resuelve
+      description: Para quién y por qué importa.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Propuesta
+      description: Qué se construye. Si hay alternativas, menciónalas en una línea cada una.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Criterios de aceptación
+      placeholder: |
+        - [ ] ...
+        - [ ] test que lo cubre
+  - type: dropdown
+    id: risk
+    attributes:
+      label: ¿Toca rutas de riesgo?
+      options:
+        - "No"
+        - "Sí: migraciones / RLS"
+        - "Sí: auth"
+        - "Sí: workflows / .factory / .claude"
+        - "Sí: eas.json / app.config / dependencias"
+    validations:
+      required: true
+  - type: checkboxes
+    id: adr
+    attributes:
+      label: Decisión
+      options:
+        - label: Requiere ADR en docs/adr/

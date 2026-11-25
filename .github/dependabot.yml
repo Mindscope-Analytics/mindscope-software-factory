@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Mexico_City
+    open-pull-requests-limit: 5
+    # Espera 7 días tras cada publicación: evita paquetes recién comprometidos.
+    cooldown:
+      default-days: 7
+    groups:
+      expo:
+        patterns: ["expo*", "@expo/*", "react-native*", "jest-expo"]
+      dev:
+        dependency-type: development
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Mexico_City
+    cooldown:
+      default-days: 7
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "chore(ci)"

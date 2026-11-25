@@ -1,0 +1,12 @@
+# Flujo de humo con Maestro (https://maestro.mobile.dev). Sin credenciales reales.
+# Ejecuta: APP_ID=com.mindscopeanalytics.app maestro test .maestro/
+appId: ${APP_ID}
+---
+- launchApp
+- assertVisible:
+    id: "login"
+- tapOn:
+    id: "email"
+- inputText: "no-es-correo"
+- tapOn: "Enviar código"
+- assertVisible: "El correo no es válido."

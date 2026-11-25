@@ -1,0 +1,39 @@
+name: Bug
+description: Algo no funciona como debería
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Qué pasa
+      description: Comportamiento observado vs. esperado.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Cómo reproducirlo
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versión / commit / entorno
+      placeholder: "main@abc1234 · Expo 54 · Android 14"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs o capturas
+      description: Redacta secretos y datos personales.
+      render: shell
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Seguridad
+      options:
+        - label: Este bug NO expone datos ni permite saltar auth (si sí, usa un Security Advisory privado).
+          required: true
