@@ -69,14 +69,18 @@ Después, en cualquier repo con Claude Code: `/install-github-app` instala la Gi
 Claude en la org (necesaria para que el bot comente y empuje commits).
 
 Controles: solo PRs del mismo repo; comentarios `/review` y `@claude` solo de OWNER/MEMBER;
-`@claude stop` detiene al steward; máximo 3 intentos; el steward nunca aprueba, fusiona ni
-toca `.github/workflows` o `.factory`.
+`@claude stop` detiene al steward; máximo 3 intentos; el steward nunca aprueba ni fusiona, no
+recibe credenciales de git (el push lo hace un paso del workflow tras verificar que no tocó
+`.github`, `.factory`, `.claude`, `.githooks`, `supabase/migrations`, `package.json` ni
+`pnpm-lock.yaml`). Opcional: el secret `STEWARD_PUSH_TOKEN` (PAT fine-grained con
+`contents: write` en el repo) hace que los pushes del steward relancen `ci`/`risk-gate`; sin
+él se empuja con `GITHUB_TOKEN` y hay que relanzar los checks a mano.
 
 ## Verificar la plantilla
 
 ```bash
 pnpm install
-pnpm test:guard            # 43 casos del hook guard-bash.sh
+pnpm test:guard            # casos permitidos y bloqueados del hook guard-bash.sh
 pnpm lint:workflows        # actionlint
 pnpm check:rls             # RLS en todas las tablas del módulo
 cd modules/supabase-base && supabase start && supabase test db && supabase stop
