@@ -22,6 +22,7 @@ MDS_BASE="${MASF_MDS_BASE:-/mnt/c/Claude}"
 usage() { sed -n '2,14p' "$0"; exit 1; }
 [ $# -ge 1 ] || usage
 NAME="$1"; shift
+[[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$ ]] || { echo "new-project: nombre inválido '$NAME' (solo letras, dígitos, . _ - ; sin / ni espacios)" >&2; exit 1; }
 VIS="--private"; PRESET=""; MODULE=""; REF=""; PROTECT=1
 while [ $# -gt 0 ]; do
   case "$1" in
