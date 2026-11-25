@@ -117,15 +117,32 @@ grep -rnE 'from\(`|select\(`|rpc\(`|\.query\(`[^`]*\$\{' --include=*.ts --includ
 
 - Toda feature trae tests; todo cambio de base de datos trae un test RLS en `supabase/tests/`.
 - Antes de abrir PR: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `/security-review`.
-- Nunca ejecutes `gh pr merge`, `git push --force` ni `supabase db reset --linked`. El hook
-  los bloquea; si lo necesitas, es una decisión humana en la terminal, no tuya.
+- Nunca ejecutes `gh pr merge`, `git push --force`, `gh api` con PUT/DELETE/PATCH ni
+  `supabase db reset --linked`; nunca pongas la etiqueta `human-approved`. El hook los
+  bloquea; si lo necesitas, es una decisión humana en la terminal o en GitHub, no tuya.
 - Si el diff toca rutas de `.factory/risk-policy.yml`, dilo en la descripción del PR con el
   riesgo y la reversa. El check `risk-gate` fallará hasta que el owner etiquete
   `human-approved`.
 - Decisiones no triviales → ADR en `docs/adr/` (copia `0000-template.md`).
 - Acciones de terceros en workflows siempre fijadas por SHA con comentario de versión.
-- No leas ni copies archivos de datos (`*.dump`, `*.db`, `*.sqlite`, `handoff/**/*.json`,
-  `audit-log.json`): la deny-list lo impide y además no debes intentarlo.
+- No leas ni copies `.env` (salvo `.env.example`) ni archivos de datos o credenciales
+  (`*.dump`, `*.db`, `*.sqlite*`, `*.sql.gz`, `*-backup-*.json`, `*.csv`, `*.xlsx`, `*.pem`,
+  `*.key`, `*.p12`, `*.jks`, `signing_keys.json`, `audit-log.json`, `handoff/**/*.json`).
+  Dos capas lo respaldan, y las dos protegen contra errores, no contra un agente adversarial
+  (ADR-0005): la deny-list de `permissions.deny` bloquea la herramienta Read sobre esos
+  patrones (los `.env.<entorno>` van enumerados porque deny no admite excepciones y
+  `.env.example` debe seguir legible), y `guard-bash.sh` bloquea cualquier comando de shell
+  cuyo argumento nombre uno de esos archivos por basename o ruta, sin importar el comando
+  (cat, grep, sed, awk, source, xxd, node -e, python3 -c, sqlite3…), con comillas y globs
+  normalizados. Lo que el hook no ve: rutas construidas con variables o sustituciones
+  (`cat $(…)`). Excepción deliberada: el destino de `cp`/`mv`, para permitir
+  `cp .env.example .env`.
+  ```bash
+  # Esperado: exit=2 en los tres
+  for c in 'grep KEY .env' 'cat handoff/x.json' 'sqlite3 x.db .dump'; do
+    printf '{"tool_input":{"command":"%s"}}' "$c" | bash .claude/hooks/guard-bash.sh 2>/dev/null; echo "exit=$?"
+  done
+  ```
 
 ## Cómo trabajar aquí
 
