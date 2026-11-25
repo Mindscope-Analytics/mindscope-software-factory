@@ -1,8 +1,12 @@
 name: risk-gate
 
-# Lee .factory/risk-policy.yml. Si el diff del PR toca rutas de riesgo, el check falla
-# salvo que el PR tenga la etiqueta `human-approved` puesta por un admin del repo.
+# Lee .factory/risk-policy.yml DESDE LA BASE del PR (no desde el PR, que podría vaciarla).
+# Si el diff del PR toca rutas de riesgo, el check falla salvo que el PR tenga la etiqueta
+# `human-approved` puesta por un admin del repo después del último commit.
 # Un `synchronize` (nuevo push) quita la etiqueta: cada versión del código se aprueba.
+# Fail-closed: sin política en la base, el PR se trata como riesgoso.
+# Riesgo incondicional (codificado aquí, no en la política, para que un PR no pueda
+# excluirlo): .factory/**, .github/workflows/**, .claude/**, .githooks/**.
 
 on:
   pull_request:
@@ -15,7 +19,7 @@ permissions:
 
 concurrency:
   group: risk-gate-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false   # un `labeled` no debe cancelar al `synchronize` que retira la etiqueta
 
 jobs:
   risk-gate:
@@ -26,6 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Quitar human-approved tras un nuevo push
         if: github.event.action == 'synchronize'
@@ -51,27 +56,45 @@ jobs:
           POLICY: .factory/risk-policy.yml
         run: |
           set -euo pipefail
-          [ -f "$POLICY" ] || { echo "sin $POLICY: nada que evaluar"; echo "risky=false" >> "$GITHUB_OUTPUT"; exit 0; }
-          label="$(grep -E '^label:' "$POLICY" | sed -E 's/^label:[[:space:]]*//; s/"//g' | head -1)"
+          # Riesgo incondicional: vive en este YAML, no en la política.
+          unconditional=('.factory/**' '.github/workflows/**' '.claude/**' '.githooks/**')
+
+          # La política se lee de la BASE del PR. Si no existe ahí: fail-closed.
+          policy="$(mktemp)"; nopolicy=0
+          if git show "${BASE_SHA}:${POLICY}" > "$policy" 2>/dev/null; then
+            echo "Política leída de la base ${BASE_SHA}:${POLICY}"
+          else
+            nopolicy=1
+            echo "::warning::No existe ${POLICY} en la base del PR (${BASE_SHA}). Fail-closed: el PR se trata como riesgoso."
+          fi
+          label="$(grep -E '^label:' "$policy" | sed -E 's/^label:[[:space:]]*//; s/"//g' | head -1 || true)"
           label="${label:-human-approved}"
-          mapfile -t patterns < <(awk '/^paths:/{f=1;next} /^[a-z_]+:/{f=0} f && /^[[:space:]]*-/' "$POLICY" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/"//g; s/[[:space:]]+#.*$//')
-          mapfile -t depfields < <(awk '/^package_json_dependency_fields:/{f=1;next} /^[a-z_]+:/{f=0} f && /^[[:space:]]*-/' "$POLICY" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/"//g')
+          mapfile -t patterns < <(awk '/^paths:/{f=1;next} /^[a-z_]+:/{f=0} f && /^[[:space:]]*-/' "$policy" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/"//g; s/[[:space:]]+#.*$//')
+          mapfile -t depfields < <(awk '/^package_json_dependency_fields:/{f=1;next} /^[a-z_]+:/{f=0} f && /^[[:space:]]*-/' "$policy" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/"//g')
           [ ${#depfields[@]} -eq 0 ] && depfields=(dependencies devDependencies)
 
           files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --paginate --jq '.[].filename')"
           echo "Archivos del PR:"; echo "$files"
           shopt -s extglob
           risky=()
+          [ "$nopolicy" = 1 ] && risky+=("(sin ${POLICY} en la base: fail-closed)")
           while IFS= read -r f; do
             [ -z "$f" ] && continue
-            for p in "${patterns[@]}"; do
-              # glob → patrón bash: ** y * cruzan directorios en [[ == ]]
+            hit=""
+            for p in "${unconditional[@]}"; do
               g="${p//\*\*/*}"
               # shellcheck disable=SC2053
-              if [[ "$f" == $g ]] || [[ "/$f" == */$g ]]; then
-                risky+=("$f  (regla: $p)"); break
-              fi
+              if [[ "$f" == $g ]]; then hit="$f  (regla fija del workflow: $p)"; break; fi
             done
+            if [ -z "$hit" ]; then
+              for p in "${patterns[@]}"; do
+                # glob → patrón bash: ** y * cruzan directorios en [[ == ]]
+                g="${p//\*\*/*}"
+                # shellcheck disable=SC2053
+                if [[ "$f" == $g ]] || [[ "/$f" == */$g ]]; then hit="$f  (regla: $p)"; break; fi
+              done
+            fi
+            [ -n "$hit" ] && risky+=("$hit")
           done <<< "$files"
 
           # package.json: solo si cambian campos de dependencias
@@ -115,7 +138,7 @@ jobs:
           fi
           has="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -cx "$LABEL" || true)"
           if [ "$has" = "0" ]; then
-            echo "::error::El PR toca rutas de .factory/risk-policy.yml. Un admin debe poner la etiqueta '${LABEL}' tras revisar el riesgo."; exit 1
+            echo "::error::El PR toca rutas de riesgo. Un admin debe poner la etiqueta '${LABEL}' tras revisar el riesgo."; exit 1
           fi
           # ¿Quién puso la etiqueta por última vez? Debe ser admin del repo.
           actor="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" --paginate \
