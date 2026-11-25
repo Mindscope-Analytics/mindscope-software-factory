@@ -16,6 +16,21 @@ updates:
         patterns: ["expo*", "@expo/*", "react-native*", "jest-expo"]
       dev:
         dependency-type: development
+    # El SDK de Expo se sube a mano (expo install --fix), nunca por Dependabot:
+    # un salto de major en expo/react-native rompe la app.
+    ignore:
+      - dependency-name: "expo*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@expo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "jest-expo"
+        update-types: ["version-update:semver-major"]
     labels: ["dependencies"]
     commit-message:
       prefix: "chore(deps)"
