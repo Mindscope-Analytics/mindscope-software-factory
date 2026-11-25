@@ -3,7 +3,7 @@
 -- simulada con set_config('request.jwt.claims') + set local role; todo dentro de
 -- una transacción que termina en rollback. No deja nada en la base.
 begin;
-select plan(11);
+select plan(12);
 
 -- 0. Usuarios efímeros -------------------------------------------------------
 insert into auth.users (instance_id, id, aud, role, email, raw_user_meta_data, created_at, updated_at)
@@ -31,9 +31,11 @@ select throws_ok(
   null,
   'anon no tiene grant sobre profiles'
 );
-select is(
-  (select count(*)::int from public.public_profiles where id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
-  1, 'anon sí ve la proyección mínima public_profiles'
+select throws_ok(
+  $$ select count(*) from public.public_profiles $$,
+  '42501',
+  null,
+  'anon no lista perfiles: public_profiles no tiene grant a anon (opt-in)'
 );
 reset role;
 
@@ -52,6 +54,10 @@ select is(
 select is(
   (select count(*)::int from public.profiles),
   1, 'B solo ve una fila en total'
+);
+select is(
+  (select count(*)::int from public.public_profiles where id in ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')),
+  2, 'B autenticado ve la proyección pública (nombre + avatar) de A y de B'
 );
 
 -- 3. B intenta escribir sobre A: 0 filas afectadas, dato intacto -----------------

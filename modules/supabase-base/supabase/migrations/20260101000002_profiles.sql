@@ -84,16 +84,28 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 -- ----------------------------------------------------------------------------
--- public_profiles: proyección mínima para mostrar autores (nombre + avatar)
--- a cualquier usuario, incluso anon, SIN exponer el resto del perfil.
--- Sin security_invoker a propósito: la vista corre como owner. NO añadas
--- columnas sensibles aquí.
+-- public_profiles: proyección mínima (id, full_name, avatar_url) para mostrar
+-- autores a usuarios AUTENTICADOS. NO añadas columnas sensibles aquí.
+--
+-- Corre como owner a propósito (sin security_invoker): con security_invoker la
+-- policy "read own" de profiles la limitaría a la fila propia, y abrirla con una
+-- policy using(true) expondría TODAS las columnas de la tabla base. El control es
+-- el GRANT de la vista + la lista de columnas.
+--
+-- anon NO tiene acceso por defecto: enumerar usuarios (nombre + avatar) con la
+-- anon key es un riesgo de privacidad (LFPDPPP). Opt-in explícito al final.
 -- ----------------------------------------------------------------------------
 create or replace view public.public_profiles as
   select id, full_name, avatar_url
   from public.profiles;
 
-grant select on public.public_profiles to anon, authenticated;
+revoke all on public.public_profiles from public, anon;
+grant select on public.public_profiles to authenticated;
+
+-- Opt-in (decisión humana, documéntala en un ADR): si el producto debe mostrar
+-- autores a visitantes anónimos, descomenta la línea siguiente y acepta que
+-- cualquiera con la anon key puede listar id + nombre + avatar de todos.
+-- grant select on public.public_profiles to anon;
 
 comment on view public.public_profiles is
-  'Proyección pública mínima de profiles (id, full_name, avatar_url). No añadir columnas sensibles.';
+  'Proyección mínima de profiles (id, full_name, avatar_url) para usuarios autenticados. No añadir columnas sensibles. anon solo por opt-in.';
