@@ -8,12 +8,13 @@
 
 La org `Mindscope-Analytics` está en plan Free. GitHub responde 403 "Upgrade to Pro or make
 public" al intentar branch protection o rulesets en repos privados (HO-001 §6, Major 1).
-Zoni y Aevo seguirán privados; la Factory y Busy Me serán públicos. Costo objetivo: $0.
+Los productos con datos de clientes seguirán privados; la Factory y los productos sin PII serán
+públicos. Costo objetivo: $0.
 
 ## Opciones consideradas
 
 1. Pagar GitHub Team: resuelve protección en privados; rompe el costo $0.
-2. Hacer públicos Zoni y Aevo: imposible sin reescribir historial (correos y PII).
+2. Hacer públicos los repos privados: imposible sin reescribir historial (correos y PII).
 3. Compuertas locales: hooks de git + hook de Claude Code que bloquean lo mismo que
    bloquearía la protección (push a main, force push, merge sin PR) en la máquina del dev.
 
@@ -33,7 +34,7 @@ En repos públicos se añade además branch protection real con checks obligator
 - Negativas: los hooks locales se pueden saltar con `--no-verify`. El hook de Claude Code
   bloquea ese flag en `git push` y `git commit`, pero una persona en la terminal sí puede
   saltárselo. Se acepta el riesgo y se documenta: la protección real existe solo donde el
-  plan lo permite.
+  plan lo permite. El alcance exacto del hook (errores, no adversarios) está en ADR-0005.
 - Reversa: `git config --unset core.hooksPath` y quitar el hook de settings.
 
 ## Verificación
