@@ -28,8 +28,20 @@ deny() {
   exit 2
 }
 
+# Quita los cuerpos de heredoc (<<EOF … EOF): son datos, no comandos. Evita falsos
+# positivos al escribir documentación que menciona comandos prohibidos.
+nohd="$(printf '%s\n' "$cmd" | awk '
+  skip { if ($0 == tag) { skip = 0 } ; next }
+  { line = $0
+    if (match(line, /<<-?[ \t]*["'"'"']?[A-Za-z_][A-Za-z0-9_]*["'"'"']?/)) {
+      tag = substr(line, RSTART, RLENGTH)
+      sub(/^<<-?[ \t]*/, "", tag); gsub(/["'"'"']/, "", tag)
+      skip = 1
+    }
+    print line
+  }')"
 # Normaliza espacios para que las regex sean simples.
-flat="$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')"
+flat="$(printf '%s' "$nohd" | tr '\n' ' ' | tr -s ' ')"
 
 # ── 3. gh pr merge ─────────────────────────────────────────────────────────────
 if printf '%s' "$flat" | grep -qE '(^|[;&| ])gh +pr +merge\b'; then

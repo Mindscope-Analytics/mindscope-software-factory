@@ -71,6 +71,10 @@ run allow "$TMP_FEAT" "echo 'force push is bad'"
 run allow "$TMP_FEAT" "cat > .env.example <<EOF\nFOO=bar # copia .env.example a .env\nEOF"
 run allow "$TMP_FEAT" "cat > notes.md <<EOF\nusa .env local\nEOF"
 run deny  "$TMP_FEAT" "cat .env <<EOF\nx\nEOF"
+run allow "$TMP_FEAT" "cat > doc.md <<'EOF'\nNunca uses gh pr merge ni git push origin main\nEOF"
+run allow "$TMP_FEAT" "tee notas.md <<EOF\ngit push --force está prohibido\nEOF"
+run deny  "$TMP_FEAT" "cat > doc.md <<EOF\ntexto\nEOF\ngh pr merge 7"
+run deny  "$TMP_FEAT" "cat > doc.md <<EOF\ntexto\nEOF\ngit push origin main"
 
 echo
 echo "pass=$pass fail=$fail"
