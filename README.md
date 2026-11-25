@@ -72,9 +72,10 @@ Controles: solo PRs del mismo repo; comentarios `/review` y `@claude` solo de OW
 `@claude stop` detiene al steward; máximo 3 intentos; el steward nunca aprueba ni fusiona, no
 recibe credenciales de git (el push lo hace un paso del workflow tras verificar que no tocó
 `.github`, `.factory`, `.claude`, `.githooks`, `supabase/migrations`, `package.json` ni
-`pnpm-lock.yaml`). Opcional: el secret `STEWARD_PUSH_TOKEN` (PAT fine-grained con
-`contents: write` en el repo) hace que los pushes del steward relancen `ci`/`risk-gate`; sin
-él se empuja con `GITHUB_TOKEN` y hay que relanzar los checks a mano.
+`pnpm-lock.yaml`, y sin ejecutar los hooks de la rama del PR). Opcional: el secret
+`STEWARD_PUSH_TOKEN` (PAT fine-grained con `contents: write` solo en ese repo, de una cuenta
+sin bypass de branch protection) hace que los pushes del steward relancen `ci`/`risk-gate`;
+sin él se empuja con `GITHUB_TOKEN` y hay que relanzar los checks a mano.
 
 ## Verificar la plantilla
 

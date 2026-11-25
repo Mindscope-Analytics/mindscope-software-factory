@@ -52,8 +52,8 @@ Opción 3. Se aceptan los tres riesgos siguientes, con sus límites:
 ## Consecuencias
 
 - Positivas: la plantilla declara exactamente lo que cumple; las compuertas remotas
-  (`risk-gate` leyendo la política de la base, steward sin credenciales, review sin `gh api`
-  mutante) ya no dependen del hook local.
+  (`risk-gate` leyendo la política de la base, steward sin credenciales de push y con el push
+  verificado por el workflow, review sin `gh api` mutante) ya no dependen del hook local.
 - Negativas: el hook sobre-bloquea algunos comandos legítimos (por ejemplo, mencionar `.env`
   en un `git commit -m`, o leer un CSV de fixtures por shell); la salida es usar `-F archivo`
   o la herramienta Read donde la deny-list lo permita. El steward sin `STEWARD_PUSH_TOKEN`
