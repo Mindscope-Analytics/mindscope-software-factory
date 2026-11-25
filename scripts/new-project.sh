@@ -7,7 +7,8 @@
 #   · clona en ~/Claude/projects/<nombre>
 #   · --factory-ref <rama>: superpone los archivos de esa rama de la Factory (útil mientras
 #     la versión deseada aún no está fusionada en main de la plantilla)
-#   · aplica el preset (+ módulo), corre setup-hooks.sh, crea /mnt/c/Claude/<Nombre>/MDs
+#   · aplica el preset (+ módulo), retira presets/ modules/ global/ (solo viven en la Factory),
+#     corre setup-hooks.sh, crea /mnt/c/Claude/<Nombre>/MDs
 #   · público → branch protection en main (PR obligatorio, checks ci/risk-gate/security,
 #     sin force push, sin bypass para admins) y etiquetas de la Factory
 #   · privado → aviso: solo aplican compuertas locales (plan Free)
@@ -66,6 +67,11 @@ if [ -n "$PRESET" ]; then
   args=("$PRESET"); [ -n "$MODULE" ] && args+=(--module "$MODULE")
   bash scripts/apply-preset.sh "${args[@]}"
 fi
+
+# Quitar lo que solo tiene sentido dentro de la Factory ---------------------------------------
+# (presets, módulos y capa global viven en la plantilla; el proyecto ya tiene su copia aplicada)
+rm -rf presets modules global docs/harvest-v0.2.md
+echo "→ retirados presets/, modules/, global/ y docs/harvest-v0.2.md (solo aplican en la Factory)"
 
 # Identidad del proyecto en package.json / README --------------------------------------------
 if [ -f package.json ]; then
