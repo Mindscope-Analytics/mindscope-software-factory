@@ -18,7 +18,9 @@ git -C "$TMP_FEAT" -c user.email=t@example.com -c user.name=t commit -q --allow-
 pass=0; fail=0
 run() { # run <esperado: allow|deny> <cwd> <comando>
   local expect="$1" cwd="$2" cmd="$3"
-  local json; json=$(jq -cn --arg c "$cmd" --arg d "$cwd" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}')
+  # "\n" en el caso de prueba = salto de línea real (así llegan los comandos multilínea al hook)
+  local real; real="$(printf '%b' "$cmd")"
+  local json; json=$(jq -cn --arg c "$real" --arg d "$cwd" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}')
   local rc; printf '%s' "$json" | bash "$HOOK" >/dev/null 2>&1; rc=$?
   local got; [ $rc -eq 0 ] && got=allow || got=deny
   if [ "$got" = "$expect" ]; then pass=$((pass+1)); printf '  ok    %-5s  %s\n' "$expect" "$cmd"
