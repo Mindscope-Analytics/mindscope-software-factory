@@ -4,7 +4,11 @@ import { createClient } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 import { readPublicEnv } from '@/lib/env';
 
-const env = readPublicEnv();
+// Accesos literales: Metro los sustituye en build (web y nativo). No pasar `process.env` entero.
+const env = readPublicEnv({
+  EXPO_PUBLIC_SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
+  EXPO_PUBLIC_SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+});
 
 /**
  * Cliente Supabase para la app (anon key + sesión del usuario → RLS).

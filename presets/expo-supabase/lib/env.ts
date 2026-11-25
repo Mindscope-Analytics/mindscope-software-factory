@@ -3,6 +3,10 @@ import { z } from 'zod';
 /**
  * Variables públicas de la app, validadas al arrancar. Si falta alguna, la app falla con un
  * mensaje claro en lugar de un error opaco de red más tarde.
+ *
+ * Importante: Metro solo inyecta `process.env.EXPO_PUBLIC_*` cuando se accede con el nombre
+ * literal (`process.env.EXPO_PUBLIC_SUPABASE_URL`). En el navegador `process` no existe, así
+ * que esta función recibe el objeto ya construido con accesos literales (ver lib/supabase.ts).
  */
 const schema = z.object({
   EXPO_PUBLIC_SUPABASE_URL: z.string().url(),
@@ -11,7 +15,7 @@ const schema = z.object({
 
 export type PublicEnv = z.infer<typeof schema>;
 
-export function readPublicEnv(source: Record<string, string | undefined> = process.env): PublicEnv {
+export function readPublicEnv(source: Record<string, string | undefined>): PublicEnv {
   const parsed = schema.safeParse({
     EXPO_PUBLIC_SUPABASE_URL: source.EXPO_PUBLIC_SUPABASE_URL,
     EXPO_PUBLIC_SUPABASE_ANON_KEY: source.EXPO_PUBLIC_SUPABASE_ANON_KEY,
