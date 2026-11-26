@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Vulnerabilidad de seguridad
+    url: https://github.com/Mindscope-Analytics/mindscope-software-factory/security/advisories/new
+    about: Repórtala en privado como Security Advisory, no como issue público.

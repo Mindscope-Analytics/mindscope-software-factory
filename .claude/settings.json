@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/.env.preview)",
+      "Read(**/.env.ci)",
+      "Read(**/.env.secret)",
+      "Read(**/.env.secrets)",
+      "Read(**/.env.keys)",
+      "Read(**/.env.vault)",
+      "Read(**/.env.bak)",
+      "Read(**/.env.backup)",
+      "Read(**/.env.old)",
+      "Read(**/supabase/.env)",
+      "Read(**/signing_keys.json)",
+      "Read(**/handoff/**/*.json)",
+      "Read(**/audit-log.json)",
+      "Read(**/*.dump)",
+      "Read(**/*.sql.gz)",
+      "Read(**/*-backup-*.json)",
+      "Read(**/full-backup.json)",
+      "Read(**/*.db)",
+      "Read(**/*.db-wal)",
+      "Read(**/*.db-shm)",
+      "Read(**/*.sqlite)",
+      "Read(**/*.sqlite3)",
+      "Read(**/*.csv)",
+      "Read(**/*.xlsx)",
+      "Read(**/*.xls)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p12)",
+      "Read(**/*.jks)",
+      "Read(**/*.keystore)",
+      "Read(**/*.p8)",
+      "Read(**/*.mobileprovision)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push --mirror*)",
+      "Bash(git push --all*)",
+      "Bash(git commit -n*)",
+      "Bash(git config core.hooksPath*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh pr review --approve*)",
+      "Bash(gh repo delete*)",
+      "Bash(gh alias set*)",
+      "Bash(gh api -X *)",
+      "Bash(gh api --method *)",
+      "Bash(supabase db reset --linked*)",
+      "Bash(supabase db reset --db-url*)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~*)",
+      "Bash(rm -rf .git*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-bash.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,127 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      db: ${{ steps.filter.outputs.db }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            files="$(git ls-files)"
+          else
+            files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          fi
+          echo "$files" | head -200
+          match() { echo "$files" | grep -qE "$1" && echo true || echo false; }
+          {
+            echo "app=$(match '^(app|lib|hooks|components|constants|tests|e2e|packages)/|^(package\.json|pnpm-lock\.yaml|tsconfig\.json|babel\.config\.js|app\.config\.ts|eas\.json|jest\.config\.[jt]s|playwright\.config\.ts)$|^scripts/|^\.claude/hooks/')"
+            echo "db=$(match '^supabase/')"
+            echo "workflows=$(match '^\.github/')"
+          } >> "$GITHUB_OUTPUT"
+
+  app:
+    name: lint · typecheck · test
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Enable pnpm (corepack)
+        run: corepack enable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      # <<preset-steps>>  (scripts/apply-preset.sh inserta aquí pasos extra del preset)
+
+  db:
+    name: supabase test db (pgTAP)
+    needs: changes
+    if: needs.changes.outputs.db == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
+        with:
+          version: 3.4.0
+      - name: RLS en todas las tablas
+        run: bash scripts/check-rls.sh
+      - name: Start local stack
+        run: supabase start -x studio,realtime,storage-api,imgproxy,edge-runtime,logflare,vector,supavisor,mailpit
+      - name: pgTAP
+        run: supabase test db
+      - name: Stop
+        if: always()
+        run: supabase stop --no-backup
+
+  workflows:
+    name: actionlint
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install actionlint (pinned, checksum)
+        run: |
+          set -euo pipefail
+          v=1.7.12
+          curl -fsSL -o /tmp/al.tgz "https://github.com/rhysd/actionlint/releases/download/v${v}/actionlint_${v}_linux_amd64.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/al.tgz" | sha256sum -c -
+          tar -xzf /tmp/al.tgz -C /tmp actionlint
+      - run: /tmp/actionlint -color
+
+  # <<preset-jobs>>  (scripts/apply-preset.sh inserta aquí jobs extra del preset)
+
+  ci:
+    name: ci
+    needs: [changes, app, db, workflows]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -qE '"result": *"(failure|cancelled)"'; then
+            echo "::error::Algún job de CI falló"; exit 1
+          fi
+          echo "ci OK"

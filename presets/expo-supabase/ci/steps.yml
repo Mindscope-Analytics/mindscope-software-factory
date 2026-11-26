@@ -1,0 +1,12 @@
+      # ── Preset expo-supabase: pasos adicionales (los inserta scripts/apply-preset.sh) ──
+      - name: Export web (Expo)
+        run: pnpm export:web
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key-not-a-secret-0000
+      - name: Sin source maps en dist
+        run: test "$(find dist -name '*.map' | wc -l)" = "0"
+      - name: Playwright (chromium)
+        run: pnpm exec playwright install --with-deps chromium && pnpm e2e:web
+        env:
+          CI: "true"

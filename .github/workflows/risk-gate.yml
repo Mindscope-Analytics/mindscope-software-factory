@@ -1,0 +1,164 @@
+name: risk-gate
+
+# Lee .factory/risk-policy.yml DESDE LA BASE del PR (no desde el PR, que podría vaciarla).
+# Si el diff del PR toca rutas de riesgo, el check falla salvo que el PR tenga la etiqueta
+# `human-approved` puesta por un admin del repo después del último commit.
+# Un `synchronize` (nuevo push) quita la etiqueta: cada versión del código se aprueba.
+# Fail-closed: sin política en la base, el PR se trata como riesgoso.
+# Riesgo incondicional (codificado aquí, no en la política, para que un PR no pueda
+# excluirlo): .factory/**, .github/workflows/**, .claude/**, .githooks/**.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: risk-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false   # un `labeled` no debe cancelar al `synchronize` que retira la etiqueta
+
+jobs:
+  risk-gate:
+    name: risk-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Quitar human-approved tras un nuevo push
+        if: github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: human-approved
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -qx "$LABEL"; then
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/${LABEL}" >/dev/null || true
+            echo "::notice::Etiqueta ${LABEL} retirada: el PR cambió y requiere nueva aprobación."
+          fi
+
+      - name: Evaluar rutas de riesgo
+        id: eval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+          POLICY: .factory/risk-policy.yml
+        run: |
+          set -euo pipefail
+          # Riesgo incondicional: vive en este YAML, no en la política.
+          unconditional=('.factory/**' '.github/workflows/**' '.claude/**' '.githooks/**')
+
+          # La política se lee de la BASE del PR. Si no existe ahí: fail-closed.
+          policy="$(mktemp)"; nopolicy=0
+          if git show "${BASE_SHA}:${POLICY}" > "$policy" 2>/dev/null; then
+            echo "Política leída de la base ${BASE_SHA}:${POLICY}"
+          else
+            nopolicy=1
+            echo "::warning::No existe ${POLICY} en la base del PR (${BASE_SHA}). Fail-closed: el PR se trata como riesgoso."
+          fi
+          label="$(grep -E '^label:' "$policy" | sed -E 's/^label:[[:space:]]*//; s/"//g' | head -1 || true)"
+          label="${label:-human-approved}"
+          mapfile -t patterns < <(awk '/^paths:/{f=1;next} /^[a-z_]+:/{f=0} f && /^[[:space:]]*-/' "$policy" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/"//g; s/[[:space:]]+#.*$//')
+          mapfile -t depfields < <(awk '/^package_json_dependency_fields:/{f=1;next} /^[a-z_]+:/{f=0} f && /^[[:space:]]*-/' "$policy" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/"//g')
+          [ ${#depfields[@]} -eq 0 ] && depfields=(dependencies devDependencies)
+
+          files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --paginate --jq '.[].filename')"
+          echo "Archivos del PR:"; echo "$files"
+          shopt -s extglob
+          risky=()
+          [ "$nopolicy" = 1 ] && risky+=("(sin ${POLICY} en la base: fail-closed)")
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            hit=""
+            for p in "${unconditional[@]}"; do
+              g="${p//\*\*/*}"
+              # shellcheck disable=SC2053
+              if [[ "$f" == $g ]]; then hit="$f  (regla fija del workflow: $p)"; break; fi
+            done
+            if [ -z "$hit" ]; then
+              for p in "${patterns[@]}"; do
+                # glob → patrón bash: ** y * cruzan directorios en [[ == ]]
+                g="${p//\*\*/*}"
+                # shellcheck disable=SC2053
+                if [[ "$f" == $g ]] || [[ "/$f" == */$g ]]; then hit="$f  (regla: $p)"; break; fi
+              done
+            fi
+            [ -n "$hit" ] && risky+=("$hit")
+          done <<< "$files"
+
+          # package.json: solo si cambian campos de dependencias
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              package.json|*/package.json)
+                sel="$(printf '{%s}' "$(printf '%s\n' "${depfields[@]}" | sed -E 's/.*/\0: .\0/' | paste -sd, -)")"
+                b="$(git show "$BASE_SHA:$f" 2>/dev/null | jq -S "$sel" 2>/dev/null || echo '{}')"
+                h="$(git show "$HEAD_SHA:$f" 2>/dev/null | jq -S "$sel" 2>/dev/null || echo '{}')"
+                if [ "$b" != "$h" ]; then risky+=("$f  (regla: dependencias)"); fi ;;
+            esac
+          done <<< "$files"
+
+          {
+            echo "label=$label"
+            if [ ${#risky[@]} -gt 0 ]; then
+              echo "risky=true"
+              echo "list<<EOF_LIST"; printf '%s\n' "${risky[@]}"; echo "EOF_LIST"
+            else
+              echo "risky=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
+          printf 'Rutas de riesgo tocadas: %s\n' "${#risky[@]}"
+          printf '  %s\n' "${risky[@]:-ninguna}"
+
+      - name: Verificar aprobación humana
+        if: steps.eval.outputs.risky == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ steps.eval.outputs.label }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+          RISKY_LIST: ${{ steps.eval.outputs.list }}
+        run: |
+          set -euo pipefail
+          echo "Rutas de riesgo:"; echo "$RISKY_LIST"
+          if [ "$ACTION" = "synchronize" ]; then
+            echo "::error::El PR toca rutas de riesgo y acaba de cambiar: requiere la etiqueta ${LABEL} puesta por un admin."; exit 1
+          fi
+          has="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -cx "$LABEL" || true)"
+          if [ "$has" = "0" ]; then
+            echo "::error::El PR toca rutas de riesgo. Un admin debe poner la etiqueta '${LABEL}' tras revisar el riesgo."; exit 1
+          fi
+          # ¿Quién puso la etiqueta por última vez? Debe ser admin del repo.
+          actor="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" --paginate \
+            --jq "[.[] | select(.event==\"labeled\" and .label.name==\"${LABEL}\")] | last | .actor.login")"
+          [ -n "$actor" ] && [ "$actor" != "null" ] || { echo "::error::No encuentro quién puso ${LABEL}."; exit 1; }
+          perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${actor}/permission" --jq '.permission')"
+          echo "Etiqueta ${LABEL} puesta por ${actor} (permiso: ${perm})"
+          if [ "$perm" != "admin" ]; then
+            echo "::error::'${actor}' no es admin del repo; la etiqueta ${LABEL} no cuenta."; exit 1
+          fi
+          # La etiqueta debe ser posterior al último commit del PR.
+          labeled_at="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" --paginate \
+            --jq "[.[] | select(.event==\"labeled\" and .label.name==\"${LABEL}\")] | last | .created_at")"
+          committed_at="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}" --jq '.commit.committer.date')"
+          echo "label: $labeled_at · head commit: $committed_at"
+          if [[ "$labeled_at" < "$committed_at" ]]; then
+            echo "::error::La etiqueta es anterior al último commit; vuelve a aprobar."; exit 1
+          fi
+          echo "Aprobación humana válida."
+
+      - name: Resultado
+        if: steps.eval.outputs.risky != 'true'
+        run: echo "Sin rutas de riesgo. risk-gate OK"

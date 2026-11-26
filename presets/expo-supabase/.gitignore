@@ -1,0 +1,26 @@
+# Expo / Metro
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+# Nativo generado y credenciales de firma
+/ios
+/android
+.kotlin/
+*.orig.*
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+# Tests
+coverage/
+playwright-report/
+test-results/
+# Entorno: solo el archivo de ejemplo viaja en el repo
+.env
+.env.*
+!.env.example

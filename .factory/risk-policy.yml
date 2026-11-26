@@ -1,0 +1,32 @@
+# Política de riesgo de la Factory.
+# risk-gate.yml lee este archivo: si el diff de un PR toca alguna de estas rutas,
+# el check falla hasta que el owner del repo ponga la etiqueta `human-approved`.
+# Un `synchronize` (nuevo push al PR) quita la etiqueta y vuelve a exigirla.
+version: 1
+label: human-approved
+# Patrones estilo glob. `**` cruza directorios.
+paths:
+  - "supabase/migrations/**"
+  - "supabase/templates/**"
+  - "**/*rls*"
+  - "**/auth/**"
+  - "**/middleware.ts"
+  - ".github/workflows/**"
+  - ".factory/**"
+  - ".claude/**"
+  - ".githooks/**"
+  - "eas.json"
+  - "app.config.*"
+  - "app.json"
+  - "**/.env*"
+  - "pnpm-lock.yaml"
+# package.json solo cuenta como riesgo si cambian dependencias
+# (dependencies, devDependencies, overrides, pnpm). Un cambio de scripts no.
+package_json_dependency_fields:
+  - dependencies
+  - devDependencies
+  - peerDependencies
+  - optionalDependencies
+  - overrides
+  - pnpm
+  - packageManager

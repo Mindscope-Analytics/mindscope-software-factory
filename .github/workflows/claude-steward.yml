@@ -1,0 +1,236 @@
+name: claude-steward
+
+# Steward: Claude intenta corregir un PR cuando (a) un OWNER/MEMBER comenta "@claude ..." en
+# el PR, o (b) el workflow `ci` falla en una rama de PR del mismo repo. Máximo 3 intentos por
+# PR (etiquetas steward-attempt-1..3). "@claude stop" pone steward-stopped y lo detiene.
+# Prohibido para el steward: aprobar, fusionar, tocar .github, .factory, .claude, .githooks,
+# supabase/migrations, package.json y pnpm-lock.yaml.
+# Modelo de confianza: el agente no recibe el token del checkout (persist-credentials: false)
+# ni shell arbitrario (sin node:*, corepack:*, pnpm:*); claude-code-action le da su propio
+# token de GitHub solo para comentar/leer (gh pr comment, gh run view). El push lo hace un
+# paso del workflow: sin hooks de la rama (core.hooksPath=/dev/null, porque el PR los
+# controla), con gitleaks verificado por checksum sobre los commits nuevos, y solo si el diff
+# origin/<rama>..HEAD no toca archivos protegidos y el árbol está limpio.
+# Si existe el secret STEWARD_PUSH_TOKEN (PAT fine-grained, contents: write SOLO en este
+# repo, de una cuenta sin bypass de branch protection) se usa para empujar y así GitHub
+# relanza ci/risk-gate; con GITHUB_TOKEN no se relanzan.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: claude-steward-${{ github.event.issue.number || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    name: "@claude stop"
+    if: |
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && contains(github.event.comment.body, '@claude stop')
+      && contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh label create steward-stopped --color B60205 --description "Steward detenido por una persona" -R "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh issue edit "$PR" --add-label steward-stopped -R "$GITHUB_REPOSITORY"
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "🛑 Steward detenido. Quita la etiqueta \`steward-stopped\` para reactivarlo."
+
+  steward:
+    name: claude steward
+    if: |
+      (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && contains(github.event.comment.body, '@claude')
+        && !contains(github.event.comment.body, '@claude stop')
+        && contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association))
+      || (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'failure'
+        && github.event.workflow_run.event == 'pull_request'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write        # solo lo usa el paso "Push" del workflow; el agente no recibe credenciales
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: ¿Hay token?
+        id: token
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Falta el secret CLAUDE_CODE_OAUTH_TOKEN; el steward se omite."
+          fi
+
+      - name: Resolver PR, rama e intentos
+        id: pr
+        if: steps.token.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ISSUE_PR: ${{ github.event.issue.number }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "issue_comment" ]; then
+            pr="$ISSUE_PR"
+          else
+            pr="$(gh pr list -R "$GITHUB_REPOSITORY" --head "$RUN_BRANCH" --state open --json number --jq '.[0].number // empty')"
+            [ -n "$pr" ] || { echo "Sin PR abierto para $RUN_BRANCH; nada que hacer."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          fi
+          json="$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json headRefName,headRepository,headRepositoryOwner,labels,isDraft,state)"
+          branch="$(echo "$json" | jq -r .headRefName)"
+          owner="$(echo "$json" | jq -r .headRepositoryOwner.login)"
+          [ "$owner" = "${GITHUB_REPOSITORY%%/*}" ] || { echo "::error::PR desde fork; el steward no actúa."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          labels="$(echo "$json" | jq -r '.labels[].name')"
+          if echo "$labels" | grep -qx steward-stopped; then echo "steward-stopped presente; salgo."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          attempts="$(echo "$labels" | grep -cE '^steward-attempt-[123]$' || true)"
+          if [ "$attempts" -ge 3 ]; then
+            gh pr comment "$pr" -R "$GITHUB_REPOSITORY" --body "⚠️ Steward: se alcanzó el máximo de 3 intentos. Requiere intervención humana. Quita las etiquetas \`steward-attempt-*\` para reiniciar el contador."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          next=$((attempts+1))
+          for i in 1 2 3; do gh label create "steward-attempt-$i" --color FBCA04 --description "Intento $i del steward" -R "$GITHUB_REPOSITORY" 2>/dev/null || true; done
+          gh issue edit "$pr" --add-label "steward-attempt-$next" -R "$GITHUB_REPOSITORY"
+          # Delimitador aleatorio: el comentario es texto de terceros y no debe poder cerrar el heredoc.
+          d="EOF_$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)"
+          {
+            echo "skip=false"; echo "number=$pr"; echo "branch=$branch"; echo "attempt=$next"
+            if [ "$EVENT" = "workflow_run" ]; then echo "reason=El workflow ci falló en $RUN_SHA: $RUN_URL"; else
+              echo "reason<<$d"; echo "Comentario de una persona en el PR:"; echo "$COMMENT"; echo "$d"; fi
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false   # el agente no recibe el token; el push lo hace el workflow
+
+      - name: Instalar gitleaks (pinned, checksum) y semgrep para los hooks locales
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          v=8.30.1
+          curl -fsSL -o /tmp/gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gl.tgz" | sha256sum -c -
+          mkdir -p /tmp/gl-bin && tar -xzf /tmp/gl.tgz -C /tmp/gl-bin gitleaks
+          echo "/tmp/gl-bin" >> "$GITHUB_PATH"
+          pipx install semgrep==1.187.0 >/dev/null
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allow_fork_prs: "false"
+          use_sticky_comment: "true"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ steps.pr.outputs.number }}
+            RAMA: ${{ steps.pr.outputs.branch }}
+            INTENTO: ${{ steps.pr.outputs.attempt }} de 3
+
+            Eres el steward de la Factory de Mindscope Analytics. Motivo de esta ejecución:
+            ${{ steps.pr.outputs.reason }}
+
+            Tu trabajo: dejar el PR en verde o atender lo que pidió la persona, con el cambio
+            MÁS PEQUEÑO posible, respetando `CLAUDE.md` y `.factory/definition-of-done.md`.
+
+            Pasos:
+            1. Lee el motivo. Si es un fallo de CI, obtén el log (`gh run view <id> --log-failed`)
+               y reproduce localmente (`pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test`).
+            2. Corrige la causa raíz. NUNCA debilites, borres ni marques `skip` en un test.
+            3. Commit con Conventional Commits (`git add` + `git commit`). NO hagas push: no tienes
+               credenciales; el workflow verifica tus commits y los empuja a la rama del PR al
+               terminar. Deja el árbol de trabajo limpio (todo commiteado) o no se empuja nada.
+            4. Comenta en el PR: qué cambió (archivos), por qué, y cómo revertir
+               (`git revert <sha>`). Si no pudiste arreglarlo, explica qué encontraste y qué
+               falta, y detente.
+
+            Prohibido absolutamente:
+            - Aprobar, solicitar cambios o fusionar el PR (`gh pr review`, `gh pr merge`).
+            - Tocar `.github/**`, `.factory/**`, `.claude/**`, `.githooks/**`,
+              `supabase/migrations/**`, `package.json` y `pnpm-lock.yaml`. Si el arreglo los
+              requiere, explícalo en un comentario y detente.
+            - Añadir secretos, tocar `.env*`, `eas.json` o `app.config.*` con valores.
+            Español, identificadores en inglés.
+          claude_args: |
+            --allowed-tools "Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(pnpm install),Bash(pnpm install --frozen-lockfile),Bash(pnpm lint),Bash(pnpm typecheck),Bash(pnpm test),Bash(pnpm test:guard),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh run view:*),Bash(gh run list:*),Bash(bash scripts/check-rls.sh),Bash(bash scripts/test-guard.sh),Read,Edit,Write,MultiEdit,Grep,Glob"
+            --disallowed-tools "Bash(git push:*),Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh api:*),Bash(git reset --hard:*),Bash(git config:*),Bash(node:*),Bash(npx:*),Bash(pnpm exec:*),Bash(pnpm dlx:*),Bash(corepack:*)"
+
+      - name: Verificar los commits del steward y empujar (lo hace el workflow, no el agente)
+        if: steps.token.outputs.ok == 'true' && steps.pr.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.STEWARD_PUSH_TOKEN || github.token }}
+          HAS_PAT: ${{ secrets.STEWARD_PUSH_TOKEN != '' }}
+          PR: ${{ steps.pr.outputs.number }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # Nada de la rama del PR corre en este paso: ni hooks (.githooks es del PR) ni config.
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          # El agente tiene Write: .git/config no debe redirigir el push ni ejecutar comandos.
+          if git config --local --list | grep -iE '^(url\..*\.insteadof|credential|http\..*\.(extraheader|proxy)|core\.(sshcommand|askpass|fsmonitor|pager|editor)|include|includeif|diff\..*\.(command|textconv)|alias)'; then
+            echo "::error::.git/config contiene claves no permitidas (insteadOf, credential, extraheader, fsmonitor…). No se empuja."
+            exit 1
+          fi
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          read_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${read_auth}" fetch origin "$BRANCH" --quiet
+
+          stop() { # <mensaje para el PR>
+            echo "::error::$1"
+            gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "🚨 Steward: $1 Sus commits NO se empujaron. Se añade \`steward-stopped\`."
+            gh issue edit "$PR" --add-label steward-stopped -R "$GITHUB_REPOSITORY" || true
+            exit 1
+          }
+          [ -z "$(git status --porcelain)" ] || stop "dejó cambios sin commit en el árbol de trabajo (sospechoso: el check compara lo que se empuja)."
+          ahead="$(git rev-list --count "origin/${BRANCH}..HEAD")"
+          if [ "$ahead" = "0" ]; then echo "Sin commits nuevos del steward; nada que empujar."; exit 0; fi
+          git log --oneline "origin/${BRANCH}..HEAD"
+
+          # Lo que se verifica es exactamente lo que se empuja: el diff origin/<rama>..HEAD.
+          changed="$(git diff --name-only "origin/${BRANCH}..HEAD" -- .github .factory .claude .githooks package.json pnpm-lock.yaml \
+            ':(glob)**/supabase/migrations/**' ':(glob)**/package.json' ':(glob)**/pnpm-lock.yaml')"
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            stop "modificó archivos protegidos (\`.github\`, \`.factory\`, \`.claude\`, \`.githooks\`, \`supabase/migrations\`, \`package.json\`, \`pnpm-lock.yaml\`)."
+          fi
+
+          # gitleaks sobre los commits nuevos, con binario re-verificado (el agente pudo tocar /tmp).
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gl.tgz" | sha256sum -c -
+          mkdir -p /tmp/gl-push && tar -xzf /tmp/gl.tgz -C /tmp/gl-push gitleaks
+          /tmp/gl-push/gitleaks git --redact --no-banner --exit-code 1 --log-opts="origin/${BRANCH}..HEAD" . \
+            || stop "gitleaks encontró posibles secretos en sus commits."
+
+          push_auth="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${push_auth}" push origin "HEAD:refs/heads/${BRANCH}"
+          if [ "$HAS_PAT" != "true" ]; then
+            gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "ℹ️ Steward: empujé ${ahead} commit(s) con \`GITHUB_TOKEN\`, así que GitHub no relanza \`ci\`/\`risk-gate\` solo. Relánzalos desde la pestaña Checks o configura el secret \`STEWARD_PUSH_TOKEN\` (PAT fine-grained, contents: write solo en este repo, cuenta sin bypass de branch protection)."
+          fi

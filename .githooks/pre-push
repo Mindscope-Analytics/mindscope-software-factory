@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# pre-push — compuerta local (activada por scripts/setup-hooks.sh).
+#  1. Bloquea cualquier push cuyo destino sea main o master.
+#  2. gitleaks sobre los commits que se van a empujar.
+# Git pasa por stdin líneas: <local ref> <local sha> <remote ref> <remote sha>
+set -u
+red()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+info() { printf '\033[36m%s\033[0m\n' "$*" >&2; }
+zero="0000000000000000000000000000000000000000"
+remote_name="${1:-origin}"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${remote_ref:-}" ] && continue
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      red "pre-push: BLOQUEADO. No se empuja a '${remote_ref#refs/heads/}'. Abre una rama y un PR."
+      exit 1 ;;
+  esac
+  [ "$local_sha" = "$zero" ] && continue   # borrado de rama remota: nada que escanear
+
+  if command -v gitleaks >/dev/null 2>&1; then
+    if [ "$remote_sha" = "$zero" ]; then
+      # Rama nueva: escanea lo que no está en ninguna rama remota conocida.
+      range="$local_sha --not --remotes=$remote_name"
+    else
+      range="$remote_sha..$local_sha"
+    fi
+    info "pre-push: gitleaks git --log-opts=\"$range\""
+    if ! gitleaks git --redact --no-banner --log-opts="$range" .; then
+      red "pre-push: gitleaks encontró posibles secretos en los commits a empujar."
+      exit 1
+    fi
+  else
+    red "pre-push: falta gitleaks; no puedo escanear los commits. Instálalo (https://github.com/gitleaks/gitleaks/releases)."
+    exit 1
+  fi
+done
+exit 0

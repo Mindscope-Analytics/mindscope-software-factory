@@ -1,0 +1,95 @@
+name: claude-review
+
+# Revisión de PRs con Claude Code. Solo corre si:
+#   · el PR viene del MISMO repo (no forks), y
+#   · para comentarios "/review", el autor es OWNER o MEMBER.
+# Requiere el secret CLAUDE_CODE_OAUTH_TOKEN (org o repo). Sin él, el job termina con un aviso.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    name: claude review
+    if: |
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && github.event.pull_request.draft == false)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && contains(github.event.comment.body, '/review')
+        && contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: ¿Hay token?
+        id: token
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Falta el secret CLAUDE_CODE_OAUTH_TOKEN; la revisión con Claude se omite. Ver README → 'Activar Claude en GitHub'."
+          fi
+
+      - name: Verificar que el comentario viene de un PR del mismo repo
+        if: steps.token.outputs.ok == 'true' && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head_repo="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.head.repo.full_name')"
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || { echo "::error::PR desde fork; no se revisa."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.ok == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1
+        if: steps.token.outputs.ok == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allow_fork_prs: "false"
+          use_sticky_comment: "true"
+          track_progress: ${{ github.event_name == 'pull_request' }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Eres el revisor de código de la Factory de Mindscope Analytics. Lee primero
+            `.factory/review-guidelines.md` y `CLAUDE.md` del repo; son tu criterio.
+
+            Método obligatorio:
+            1. Obtén el diff completo del PR (`gh pr diff`). Revisa TODOS los archivos.
+            2. Por cada hallazgo, VERIFÍCALO antes de reportarlo: abre el archivo, lee el
+               contexto y, si aplica, corre el comando de verificación de CLAUDE.md. Si no
+               puedes verificarlo, repórtalo como "posible" en el resumen, no como hallazgo.
+            3. Clasifica cada hallazgo como critical, major o minor según la guía.
+            4. Publica comentarios EN LÍNEA (mcp__github_inline_comment__create_inline_comment)
+               por cada hallazgo verificado, con archivo:línea, evidencia y corrección sugerida.
+            5. Publica UN resumen con: conteo por severidad, lista de "posibles", verificaciones
+               ejecutadas y veredicto (APROBABLE / CAMBIOS REQUERIDOS / BLOQUEADO).
+
+            Prohibido: aprobar, solicitar cambios formalmente, fusionar, modificar archivos o
+            empujar commits. Solo lees y comentas. Español, identificadores en inglés.
+          claude_args: |
+            --allowed-tools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api repos/*/pulls/*/files*),Bash(gh api repos/*/pulls/*/comments*),Bash(git diff:*),Bash(git log:*),Bash(bash scripts/check-rls.sh),Bash(grep:*),Bash(find:*),Read,Grep,Glob"
+            --disallowed-tools "Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh api -X:*),Bash(gh api --method:*),Bash(git push:*),Edit,Write,MultiEdit,NotebookEdit"
